@@ -1,0 +1,153 @@
+import sys
+import locale
+
+# Set locale for currency formatting
+locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
+
+# --- USER-DEFINED PLAN & IRS PARAMETERS FOR 2026 ---
+# These are the fixed constraints of your plan and the year, based on a 50+ participant.
+
+# 2026 IRS Limits (Age 50+ assumed)
+MAX_DEFERRAL = 32500         # Max 401k employee deferral ($24,500 + $8,000 catch-up)
+MAX_DC_LIMIT = 80000         # Max Defined Contribution (415c) limit
+MAX_CB_CONTRIB = 393000      # Actuary's Maximum CB Contribution (for high income check)
+CB_MIN_CONTRIB = 195500      # Actuary's Minimum CB Contribution
+
+# Plan Design Parameters
+PS_RATE = 0.06               # 6.0% Profit Sharing rate
+CB_FUNDING_RATE = 0.75       # 75% W-2 salary assumption for CB funding
+
+# --- CALCULATOR FUNCTION ---
+
+def calculate_optimized_funding(gross_income_g):
+    """
+    Calculates the Optimal W-2 Salary (W) and contributions based on the Gross Income (G).
+    
+    Priority: 1. Maximize CB/PS (based on 75% W-2 rule) -> 2. Fund Employee Deferral.
+    """
+    
+    # 1. Calculate the theoretical W-2 required to MAXIMIZE all employer buckets (PS and CB)
+    # The required W-2 is the amount needed to justify the MAX CB contribution.
+    w2_required_to_max_cb = MAX_CB_CONTRIB / CB_FUNDING_RATE
+    
+    # Calculate the total cash needed to fully fund the maximum scenario (W2_Max_CB + PS + CB + Deferral)
+    # Total Cash = W_CB + (W_CB * PS_RATE) + CB_MAX_CONTRIB + MAX_DEFERRAL
+    cash_needed_max_scenario = (
+        w2_required_to_max_cb + 
+        (w2_required_to_max_cb * PS_RATE) + 
+        MAX_CB_CONTRIB + 
+        MAX_DEFERRAL 
+    )
+
+    if gross_income_g >= cash_needed_max_scenario:
+        # --- PATH A: HIGH GROSS INCOME (Fund everything) ---
+        
+        # We set the W-2 to the minimum required to justify the MAX CB amount.
+        optimal_w2 = w2_required_to_max_cb
+        final_ps = optimal_w2 * PS_RATE
+        final_cb = MAX_CB_CONTRIB
+        final_deferral = MAX_DEFERRAL
+        
+        strategy = "MAXIMUM FUNDING (All Buckets Funded)"
+        total_expense = optimal_w2 + final_ps + final_cb + final_deferral
+        net_profit = gross_income_g - total_expense
+        
+    else:
+        # --- PATH B: CASH CONSTRAINED (Maximize PS and CB first) ---
+        
+        # We assume the Employee Deferral is the lowest priority cash expense.
+        # W-2 is solved to perfectly cover W, PS, and CB, while excluding the Deferral from the main equation.
+        # Optimal W-2 = G / (1 + PS_RATE + CB_FUNDING_RATE)
+        
+        allocation_factor = 1 + PS_RATE + CB_FUNDING_RATE
+        optimal_w2 = gross_income_g / allocation_factor
+
+        final_ps = optimal_w2 * PS_RATE
+        final_cb = optimal_w2 * CB_FUNDING_RATE
+        
+        # Calculate how much cash is left for the Deferral (capped by MAX_DEFERRAL)
+        cash_used_by_w2_ps_cb = optimal_w2 + final_ps + final_cb
+        remaining_cash = gross_income_g - cash_used_by_w2_ps_cb
+        
+        # Fund the Deferral with the remaining cash (which will be $0 in the tightest case)
+        final_deferral = min(MAX_DEFERRAL, remaining_cash) if remaining_cash > 0 else 0
+        
+        strategy = "CASH CONSTRAINED (Max CB/PS within G limit)"
+        total_expense = optimal_w2 + final_ps + final_cb + final_deferral
+        net_profit = gross_income_g - total_expense
+
+    # --- FINAL OUTPUT STRUCTURE ---
+    total_tax_deduction = final_ps + final_cb + final_deferral
+    taxable_net_income = results['Optimal W-2 Salary'] - results['Employee Deferral']
+    
+    return {
+        "Optimal W-2 Salary": optimal_w2,
+        "Employee Deferral": final_deferral,
+        "Profit Sharing": final_ps,
+        "Cash Balance": final_cb,
+        "Total Tax Deduction": total_tax_deduction,
+        "Taxable Net Income": taxable_net_income,
+        "Strategy": strategy,
+        "Net Corporate Profit": net_profit
+    }
+
+# --- MAIN EXECUTION BLOCK (Output Formatting) ---
+
+if __name__ == "__main__":
+    
+    def fmt(amount):
+        return locale.currency(amount, grouping=True)
+
+    print("\n--- 2026 Comprehensive Retirement Funding Calculator (Age 50+) ---")
+    
+    try:
+        default_income = 510000 
+        input_g = input(f"Enter your Gross Corporate Income for 2026 (Default: {fmt(default_income)}): $")
+        
+        if not input_g:
+            gross_income_input = default_income
+        else:
+            gross_income_input = float(input_g.replace('$', '').replace(',', ''))
+            
+        if gross_income_input <= 0:
+            raise ValueError
+            
+    except ValueError:
+        print("\nInvalid input. Please enter a positive numerical value.")
+        sys.exit(1)
+
+    # Calculation
+    results = calculate_optimized_funding(gross_income_input)
+
+    # Output
+    print("-" * 65)
+    print(f"💰 STRATEGY: {results['Strategy']}")
+    print(f"Gross Income Input: {fmt(gross_income_input):>25}")
+    print("-" * 65)
+    
+    print(f"{'ALLOCATION':<35} | {'Amount':>25}")
+    print("-" * 65)
+    
+    print(f"{'Optimal W-2 Salary (W)':<35} | {fmt(results['Optimal W-2 Salary']):>25}")
+    
+    print(f"{'1. Cash Balance (75% of W)':<35} | {fmt(results['Cash Balance']):>25}")
+    print(f"{'2. Profit Sharing (6% of W)':<35} | {fmt(results['Profit Sharing']):>25}")
+    
+    deferral_note = "(Max Deferral)" if results['Employee Deferral'] == MAX_DEFERRAL else "(Unfunded/Partial)"
+    print(f"{f'3. Employee Deferral (Max {fmt(MAX_DEFERRAL)})':<35} | {fmt(results['Employee Deferral']):>25} {deferral_note}")
+    
+    print("-" * 65)
+    
+    print(f"{'TOTAL TAX DEDUCTION (PS + CB + Deferral)':<35} | {fmt(results['Total Tax Deduction']):>25}")
+    print(f"{'Taxable Net Income (W - Deferral)':<35} | {fmt(results['Taxable Net Income']):>25}")
+    print(f"{'Net Corporate Profit/Loss':<35} | {fmt(results['Net Corporate Profit']):>25}")
+    print("-" * 65)
+    
+    if results['Cash Balance'] > 0:
+        funding_range_note = "COMPLIANT" if CB_MIN_CONTRIB <= results['Cash Balance'] <= MAX_CB_CONTRIB else "CHECK ACTUARY"
+        print(f"CB Funding Check: {fmt(results['Cash Balance'])} is within the actuarial range. Status: {funding_range_note}")
+    
+    print("\nNOTE: Profit Sharing and Cash Balance employer contributions are FICA exempt.")
+
+# The video below provides an overview of the new 401(k) rules for 2026, which are critical for setting the correct limits in this calculator.
+# [New 401K Rules in 2026 You Need to Know](https://www.youtube.com/watch?v=siEEG349gSc)
